@@ -1,0 +1,12 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - errorlint    # correct use of errors.Is/As and %w
+    - gocritic     # common mistakes and simplifications
+    - misspell     # typos in comments and strings
+    - nolintlint   # require justification on //nolint directives
+    - paralleltest # ensure tests call t.Parallel
+    - revive       # style consistency
+    - thelper      # ensure test helpers call t.Helper
+    - unconvert    # flag unnecessary type conversions
