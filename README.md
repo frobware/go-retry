@@ -172,7 +172,7 @@ All results were measured on an Apple M4 using constant/fixed backoff.
 
 | ns/op | B/op | allocs/op |
 |------:|-----:|----------:|
-|  1.81 |    0 |         0 |
+|  1.43 |    0 |         0 |
 
 ### With retries
 
@@ -182,12 +182,12 @@ before succeeding.
 
 | Retries |  ns/op | B/op | allocs/op |
 |--------:|-------:|-----:|----------:|
-|       1 |    189 |  248 |         3 |
-|      10 |  2,572 |  248 |         3 |
-|     100 | 21,856 |  248 |         3 |
+|       1 |    230 |  256 |         4 |
+|      10 |  2,723 |  256 |         4 |
+|     100 | 22,556 |  256 |         4 |
 
-Allocations are constant regardless of retry count: 3 allocs/248 B
-from the single timer allocation on the first retry.
+Allocations are constant regardless of retry count: 4 allocs/256 B
+from the timer and the `errors.As` target allocated on first use.
 
 Reproduce with:
 

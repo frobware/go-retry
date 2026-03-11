@@ -292,64 +292,71 @@ func (c *Config) sleepForRetry(retry int64) time.Duration {
 // done, the permanent error takes precedence — the operation is
 // closest to the work and its explicit signal is respected.
 func DoWithConfig(ctx context.Context, cfg *Config, operation Operation) error {
-	var (
-		attempt int64 = 1
-		timer   *time.Timer
-	)
-
-	for {
-		opErr := operation(ctx)
-		if opErr == nil {
-			return nil
-		}
-
-		var perr *permanentError
-		if errors.As(opErr, &perr) {
-			return perr.err
-		}
-
-		// When a context carries a custom cause (via
-		// context.WithCancelCause), context.Cause returns that
-		// cause — not context.Canceled or context.DeadlineExceeded.
-		// This means errors.Is(err, context.Canceled) fails,
-		// breaking the check most callers rely on. Until the
-		// standard library fixes this (golang/go#63759), we wrap
-		// both the canonical context error and the custom cause
-		// with dual %w so errors.Is matches either.
-		if ctx.Err() != nil {
-			cause := context.Cause(ctx)
-			if cause != ctx.Err() { //nolint:errorlint // identity comparison; errors.Is would match a cause that wraps the context error
-				return fmt.Errorf("aborted after attempt %d: %w: %w", attempt, ctx.Err(), cause)
-			}
-			return fmt.Errorf("aborted after attempt %d: %w", attempt, cause)
-		}
-
-		if cfg.maxAttempts > 0 && attempt >= cfg.maxAttempts {
-			return fmt.Errorf("failed after %d attempts: %w: %w", attempt, opErr, ErrRetryAborted)
-		}
-
-		sleep := cfg.sleepForRetry(attempt)
-
-		if timer == nil {
-			timer = time.NewTimer(sleep)
-		} else {
-			timer.Reset(sleep)
-		}
-
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			// Dual-wrap context cause; see comment above.
-			cause := context.Cause(ctx)
-			if cause != ctx.Err() { //nolint:errorlint // identity comparison; see comment above
-				return fmt.Errorf("aborted after attempt %d: %w: %w", attempt, ctx.Err(), cause)
-			}
-			return fmt.Errorf("aborted after attempt %d: %w", attempt, cause)
-		}
-
-		attempt++
+	opErr := operation(ctx)
+	if opErr == nil {
+		return nil
 	}
+
+	// The retry loop is a closure so that perr (the errors.As
+	// target) only escapes to the heap when retries actually
+	// happen, keeping the happy path zero-alloc. The loop
+	// processes opErr before calling the operation, inverting
+	// the natural call -> check -> sleep order.
+	return func() error {
+		var (
+			attempt int64 = 1
+			timer   *time.Timer
+			perr    *permanentError
+		)
+
+		for {
+			if errors.As(opErr, &perr) {
+				return perr.err
+			}
+
+			if ctx.Err() != nil {
+				return contextAbortError(ctx, attempt)
+			}
+
+			if cfg.maxAttempts > 0 && attempt >= cfg.maxAttempts {
+				return fmt.Errorf("failed after %d attempts: %w: %w", attempt, opErr, ErrRetryAborted)
+			}
+
+			sleep := cfg.sleepForRetry(attempt)
+
+			if timer == nil {
+				timer = time.NewTimer(sleep)
+			} else {
+				timer.Reset(sleep)
+			}
+
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return contextAbortError(ctx, attempt)
+			}
+
+			attempt++
+
+			opErr = operation(ctx)
+			if opErr == nil {
+				return nil
+			}
+		}
+	}()
+}
+
+// contextAbortError returns an error wrapping the context error and,
+// when present, a distinct custom cause. See the package
+// documentation's "Context cancellation" section for background on
+// why dual wrapping is needed.
+func contextAbortError(ctx context.Context, attempt int64) error {
+	cause := context.Cause(ctx)
+	if cause != ctx.Err() { //nolint:errorlint // identity comparison; errors.Is would match a cause that wraps the context error
+		return fmt.Errorf("aborted after attempt %d: %w: %w", attempt, ctx.Err(), cause)
+	}
+	return fmt.Errorf("aborted after attempt %d: %w", attempt, cause)
 }
 
 // sleepInterval computes the sleep duration from a base interval.
